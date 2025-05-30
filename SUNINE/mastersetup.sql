@@ -28,7 +28,7 @@
 -- 테이블 생성 ------------------------------------------------
 
 CREATE TABLE Owner (
-    ownerSsn VARCHAR(13) PRIMARY KEY,
+    ownerSsn VARCHAR(20) PRIMARY KEY,
     name VARCHAR(50),
     phone VARCHAR(20)
 );
