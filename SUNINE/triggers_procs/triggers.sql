@@ -20,4 +20,13 @@ BEGIN
     )
     WHERE itemId = NEW.itemId;
 END$$
+
+CREATE TRIGGER trg_update_stock_on_harvest
+AFTER INSERT ON HarvestLog
+FOR EACH ROW
+BEGIN
+    UPDATE Item
+    SET itemStock = itemStock + NEW.quantityHarvested
+    WHERE itemId = NEW.itemId;
+END$$
 DELIMITER ;
