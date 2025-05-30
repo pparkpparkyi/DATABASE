@@ -56,6 +56,7 @@ CREATE TABLE Item (
     cultivationDate DATE,
     farmId INT,
     averageRating FLOAT DEFAULT 0,
+    itemStock INT DEFAULT 0, -- New column
     FOREIGN KEY (farmId) REFERENCES Farm(farmId)
 );
 
@@ -116,6 +117,16 @@ CREATE TABLE QualityInspection (
     FOREIGN KEY (farmId) REFERENCES Farm(farmId)
 );
 
+CREATE TABLE HarvestLog (
+    harvestId INT AUTO_INCREMENT PRIMARY KEY,
+    itemId INT,
+    farmId INT,
+    quantityHarvested INT,
+    harvestDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (itemId) REFERENCES Item(itemId),
+    FOREIGN KEY (farmId) REFERENCES Farm(farmId)
+);
+
 -- -----------------------------------------------------------------------------
 -- 2. Create Triggers
 -- Source: SUNINE/triggers_procs/triggers.sql
@@ -141,6 +152,37 @@ BEGIN
         WHERE itemId = NEW.itemId
     )
     WHERE itemId = NEW.itemId;
+END$$
+
+CREATE TRIGGER trg_update_stock_on_harvest
+AFTER INSERT ON HarvestLog
+FOR EACH ROW
+BEGIN
+    UPDATE Item
+    SET itemStock = itemStock + NEW.quantityHarvested
+    WHERE itemId = NEW.itemId;
+END$$
+
+CREATE TRIGGER trg_decrease_stock_on_order
+AFTER INSERT ON `Order`
+FOR EACH ROW
+BEGIN
+    UPDATE Item
+    SET itemStock = itemStock - NEW.quantity
+    WHERE itemId = NEW.itemId;
+END$$
+
+CREATE TRIGGER trg_update_preferrank_on_review
+AFTER INSERT ON Review
+FOR EACH ROW
+BEGIN
+    DECLARE v_itemRank VARCHAR(10);
+    IF NEW.rating >= 4 THEN
+        SELECT itemRank INTO v_itemRank FROM Item WHERE itemId = NEW.itemId;
+        IF v_itemRank IS NOT NULL THEN
+            INSERT IGNORE INTO PreferRank (customerId, itemRank) VALUES (NEW.customerId, v_itemRank);
+        END IF;
+    END IF;
 END$$
 DELIMITER ;
 
@@ -184,6 +226,32 @@ CREATE PROCEDURE proc_register_inspection(
 BEGIN
     INSERT INTO QualityInspection(itemId, farmId, inspectorName, inspectionDate, inspectionResult)
     VALUES (p_itemId, p_farmId, p_inspector, CURDATE(), p_result);
+END$$
+
+CREATE PROCEDURE proc_update_preferrank_from_orders(IN p_customerId INT)
+BEGIN
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE v_itemRank VARCHAR(10);
+    DECLARE v_orderCount INT; -- Though v_orderCount is fetched, it's not directly used after HAVING.
+                            -- It's implicitly used by the HAVING COUNT(*) > 2 filter.
+    DECLARE cur_ranks CURSOR FOR
+        SELECT I.itemRank, COUNT(*) AS orderCount
+        FROM `Order` O
+        JOIN Item I ON O.itemId = I.itemId
+        WHERE O.customerId = p_customerId
+        GROUP BY I.itemRank
+        HAVING COUNT(*) > 2; -- Threshold: ordered more than 2 times
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    OPEN cur_ranks;
+    read_loop: LOOP
+        FETCH cur_ranks INTO v_itemRank, v_orderCount;
+        IF done THEN
+            LEAVE read_loop;
+        END IF;
+        INSERT IGNORE INTO PreferRank (customerId, itemRank) VALUES (p_customerId, v_itemRank);
+    END LOOP;
+    CLOSE cur_ranks;
 END$$
 DELIMITER ;
 
@@ -236,24 +304,25 @@ INSERT INTO Customer (password, address) VALUES
 
 -- Item table
 -- Assuming farmId 1 corresponds to '햇살농장' and farmId 2 to '푸른언덕농원'
--- (AUTO_INCREMENT values for farmId will typically start from 1)
-INSERT INTO Item (itemName, itemRank, price, cultivationDate, farmId, averageRating) VALUES
-('프리미엄 샤인머스캣 2kg', '특', 35000, '2023-09-01', 1, 4.5),
-('가정용 샤인머스캣 4kg', '상', 55000, '2023-09-15', 1, 4.2),
-('유기농 샤인머스캣 1kg', '특', 25000, '2023-08-25', 2, 4.8),
-('GAP 인증 샤인머스캣 3kg', '중', 40000, '2023-09-10', 2, DEFAULT),
-('일반 샤인머스캣 5kg', '하', 60000, '2023-09-20', 1, 3.9);
+-- itemStock is initial stock BEFORE HarvestLog entries are processed by trigger.
+INSERT INTO Item (itemName, itemRank, price, cultivationDate, farmId, averageRating, itemStock) VALUES
+('프리미엄 샤인머스캣 2kg', '특', 35000, '2023-09-01', 1, 4.5, 100),
+('가정용 샤인머스캣 4kg', '상', 55000, '2023-09-15', 1, 4.2, 150),
+('유기농 샤인머스캣 1kg', '특', 25000, '2023-08-25', 2, 4.8, 80),
+('GAP 인증 샤인머스캣 3kg', '중', 40000, '2023-09-10', 2, DEFAULT, 120),
+('일반 샤인머스캣 5kg', '하', 60000, '2023-09-20', 1, 3.9, 200);
 
 -- Order table
 -- Assuming customerId 1-5 and itemId 1-5 exist
+-- These orders will DECREASE itemStock via trg_decrease_stock_on_order
 INSERT INTO `Order` (customerId, itemId, quantity, orderDate, deliveryAddress, orderStatus) VALUES
-(1, 1, 1, '2023-10-01 10:00:00', '서울시 강남구 테헤란로 123', 'DELIVERED'),
-(2, 3, 2, '2023-10-05 14:30:00', '부산시 해운대구 마린시티로 456', 'SHIPPED'),
-(3, 2, 1, '2023-10-10 09:15:00', '인천시 연수구 송도국제대로 789', 'ORDERED'),
-(1, 4, 3, '2023-10-12 11:00:00', '서울시 강남구 봉은사로 524', 'REFUND_REQUESTED'),
-(4, 5, 1, '2023-10-15 16:45:00', '대전시 유성구 대학로 101', 'DELIVERED'),
-(5, 1, 2, '2023-10-18 10:20:00', '광주시 서구 상무중앙로 202', 'ORDERED'),
-(2, 5, 1, '2023-10-20 12:00:00', '부산시 수영구 광안해변로 219', 'SHIPPED');
+(1, 1, 1, '2023-10-01 10:00:00', '서울시 강남구 테헤란로 123', 'DELIVERED'),       -- Item 1 stock: 100 - 1 = 99
+(2, 3, 2, '2023-10-05 14:30:00', '부산시 해운대구 마린시티로 456', 'SHIPPED'),       -- Item 3 stock: 80 - 2 = 78
+(3, 2, 1, '2023-10-10 09:15:00', '인천시 연수구 송도국제대로 789', 'ORDERED'),       -- Item 2 stock: 150 - 1 = 149
+(1, 4, 3, '2023-10-12 11:00:00', '서울시 강남구 봉은사로 524', 'REFUND_REQUESTED'), -- Item 4 stock: 120 - 3 = 117
+(4, 5, 1, '2023-10-15 16:45:00', '대전시 유성구 대학로 101', 'DELIVERED'),       -- Item 5 stock: 200 - 1 = 199
+(5, 1, 2, '2023-10-18 10:20:00', '광주시 서구 상무중앙로 202', 'ORDERED'),       -- Item 1 stock: 99 - 2 = 97
+(2, 5, 1, '2023-10-20 12:00:00', '부산시 수영구 광안해변로 219', 'SHIPPED');       -- Item 5 stock: 199 - 1 = 198
 
 -- Review table
 -- Assuming customerId 1-5 and itemId 1-5 exist
@@ -286,6 +355,19 @@ INSERT INTO QualityInspection (itemId, farmId, inspectorName, inspectionDate, in
 (1, 1, '김인수 검사관', '2023-08-28', 'PASS', '당도 및 크기 기준치 통과'),
 (3, 2, '박현지 검사관', '2023-08-20', 'PASS', '친환경 인증 기준 적합, 일부 샘플 당도 미달'),
 (5, 1, '김인수 검사관', '2023-09-18', 'FAIL', '전반적인 상품성 부족, 폐기 대상');
+
+-- HarvestLog Sample Data
+-- These inserts will INCREASE itemStock via trg_update_stock_on_harvest
+-- Item stocks after these and orders:
+-- Item 1: 100 (initial) - 1 (order1) - 2 (order6) + 50 (harvest1) = 147
+-- Item 2: 150 (initial) - 1 (order3) + 75 (harvest2) = 224
+-- Item 3: 80  (initial) - 2 (order2) + 60 (harvest3) = 138
+-- Item 4: 120 (initial) - 3 (order4) = 117
+-- Item 5: 200 (initial) - 1 (order5) - 1 (order7) = 198
+INSERT INTO HarvestLog (itemId, farmId, quantityHarvested, harvestDate) VALUES
+(1, 1, 50, NOW() - INTERVAL 7 DAY),
+(2, 1, 75, NOW() - INTERVAL 5 DAY),
+(3, 2, 60, NOW() - INTERVAL 3 DAY);
 
 -- =============================================================================
 -- End of Master Setup Script
