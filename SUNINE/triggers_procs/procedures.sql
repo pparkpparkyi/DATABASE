@@ -35,4 +35,30 @@ BEGIN
     INSERT INTO QualityInspection(itemId, farmId, inspectorName, inspectionDate, inspectionResult)
     VALUES (p_itemId, p_farmId, p_inspector, CURDATE(), p_result);
 END$$
+
+CREATE PROCEDURE proc_update_preferrank_from_orders(IN p_customerId INT)
+BEGIN
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE v_itemRank VARCHAR(10);
+    DECLARE v_orderCount INT; -- Though v_orderCount is fetched, it's not directly used after HAVING.
+                            -- It's implicitly used by the HAVING COUNT(*) > 2 filter.
+    DECLARE cur_ranks CURSOR FOR
+        SELECT I.itemRank, COUNT(*) AS orderCount
+        FROM `Order` O
+        JOIN Item I ON O.itemId = I.itemId
+        WHERE O.customerId = p_customerId
+        GROUP BY I.itemRank
+        HAVING COUNT(*) > 2; -- Threshold: ordered more than 2 times
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    OPEN cur_ranks;
+    read_loop: LOOP
+        FETCH cur_ranks INTO v_itemRank, v_orderCount;
+        IF done THEN
+            LEAVE read_loop;
+        END IF;
+        INSERT IGNORE INTO PreferRank (customerId, itemRank) VALUES (p_customerId, v_itemRank);
+    END LOOP;
+    CLOSE cur_ranks;
+END$$
 DELIMITER ;
