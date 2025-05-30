@@ -1,21 +1,28 @@
 DELIMITER $$
-CREATE PROCEDURE proc_process_refund(IN p_orderId INT)
+-- Stored procedure to process a refund for an order and update the defect report.
+--
+-- Parameters:
+--   p_orderId: The ID of the order to be refunded.
+--   p_reportId: The ID of the defect report related to the order.
+CREATE PROCEDURE proc_process_refund(IN p_orderId INT, IN p_reportId INT)
 BEGIN
     DECLARE v_amount INT;
 
+    -- Calculate the refund amount based on the item price and order quantity.
     SELECT price * quantity INTO v_amount
     FROM `Order` O
     JOIN Item I ON O.itemId = I.itemId
     WHERE O.orderId = p_orderId;
 
+    -- Update the order status to 'REFUNDED'.
     UPDATE `Order`
     SET orderStatus = 'REFUNDED'
     WHERE orderId = p_orderId;
 
-    INSERT INTO DefectReport (orderId, itemId, customerId, reason, reportedAt, processed, refundAmount)
-    SELECT orderId, itemId, customerId, '자동 환불 처리', NOW(), TRUE, v_amount
-    FROM `Order`
-    WHERE orderId = p_orderId;
+    -- Update the defect report to mark it as processed and record the refund amount.
+    UPDATE DefectReport
+    SET processed = TRUE, refundAmount = v_amount
+    WHERE reportId = p_reportId;
 END$$
 
 CREATE PROCEDURE proc_register_inspection(
