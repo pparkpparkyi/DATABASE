@@ -29,6 +29,7 @@ CREATE TABLE Item (
     cultivationDate DATE,
     farmId INT,
     averageRating FLOAT DEFAULT 0,
+    itemStock INT DEFAULT 0, -- New column
     FOREIGN KEY (farmId) REFERENCES Farm(farmId)
 );
 
@@ -85,6 +86,16 @@ CREATE TABLE QualityInspection (
     inspectionDate DATE,
     inspectionResult VARCHAR(10),
     notes TEXT,
+    FOREIGN KEY (itemId) REFERENCES Item(itemId),
+    FOREIGN KEY (farmId) REFERENCES Farm(farmId)
+);
+
+CREATE TABLE HarvestLog (
+    harvestId INT AUTO_INCREMENT PRIMARY KEY,
+    itemId INT,
+    farmId INT,
+    quantityHarvested INT,
+    harvestDate DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (itemId) REFERENCES Item(itemId),
     FOREIGN KEY (farmId) REFERENCES Farm(farmId)
 );
